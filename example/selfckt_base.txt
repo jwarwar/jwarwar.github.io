@@ -1,0 +1,849 @@
+#include <SPI.h>
+#include <Wire.h>
+
+#include <driver/adc.h>
+
+// *************************************************************
+// JMS981 Buttons
+// BSTATE = (BHM  << 6) + (BEN << 5) + (BLT << 4) + (BRT << 3) + (BUP << 2) + (BDN << 1) + (BSW);
+// *************************************************************
+#define BHM_PIN  5
+#define BEN_PIN 32
+#define BLT_PIN 27
+#define BRT_PIN  4
+#define BUP_PIN  0
+#define BDN_PIN  2
+#define BSW_PIN 33
+
+#define BHM_ON   0
+#define BEN_ON   0
+#define BLT_ON   0
+#define BRT_ON   0
+#define BUP_ON   0
+#define BDN_ON   0
+#define BSW_ON   0
+
+#define DIO_RED 23
+#define DIO_GRN 18
+#define DIO_BLU 19
+
+#define SPK_PIN 26
+
+#define BHM_PIN_TYPE   INPUT_PULLUP
+#define BEN_PIN_TYPE   INPUT_PULLUP
+#define BLT_PIN_TYPE   INPUT_PULLUP
+#define BRT_PIN_TYPE   INPUT_PULLUP
+#define BUP_PIN_TYPE   INPUT_PULLUP
+#define BDN_PIN_TYPE   INPUT_PULLUP
+#define BSW_PIN_TYPE   INPUT_PULLUP
+
+#define DIO_RED_TYPE   OUTPUT
+#define DIO_GRN_TYPE   OUTPUT
+#define DIO_BLU_TYPE   OUTPUT
+
+#define SPK_PIN_TYPE   OUTPUT
+
+#define BHM_MASK (1 << 6)
+#define BEN_MASK (1 << 5)
+#define BLT_MASK (1 << 4)
+#define BRT_MASK (1 << 3)
+#define BUP_MASK (1 << 2)
+#define BDN_MASK (1 << 1)
+#define BSW_MASK (1 << 0)
+
+#define BHM_OFF (1-BHM_ON)
+#define BEN_OFF (1-BEN_ON)
+#define BLT_OFF (1-BLT_ON)
+#define BRT_OFF (1-BRT_ON)
+#define BUP_OFF (1-BUP_ON)
+#define BDN_OFF (1-BDN_ON)
+#define BSW_OFF (1-BSW_ON)
+
+#define DIO_ON  1
+#define DIO_OFF 0
+// *************************************************************
+
+// *************************************************************
+// Function State Variables
+// *************************************************************
+uint8_t  kt_run;
+uint8_t  kt_idx;
+uint32_t kt_del[9];
+uint32_t kt_len;
+
+uint32_t gg_hrs;
+uint32_t gg_min;
+uint32_t gg_sec;
+uint32_t gg_dec;
+
+#define NUM_MODES 4
+uint8_t mdx;
+uint8_t mm;
+uint8_t mm_num;
+uint8_t mm_sel;
+uint8_t mm_start;
+char *mm_name[NUM_MODES];
+
+uint8_t  mt_run;
+uint8_t  mt_idx;
+uint16_t mt_del[10];
+
+uint16_t mt_bpm;
+uint16_t mt_cnt;
+uint16_t mt_frq;
+
+uint8_t  msg_cnt;
+// *************************************************************
+
+#include "self_display.h"
+
+#include "self_timers.h"
+
+// *************************************************************
+// FIFO to hold button states until they can be processed
+// *************************************************************
+uint8_t    stateFIFO[16];
+uint8_t    sgoodFIFO[16];
+TickType_t stimeFIFO[16];
+int8_t     fifo_sdx = 0;
+int8_t     fifo_rdx = 0;
+// *************************************************************
+
+
+// *************************************************************
+// Code for buttons
+// *************************************************************
+#define DEBOUNCETIME  10
+#define BSTROBE_DLY   20
+#define DISPLAYTIME   50
+
+
+int pushCnt = 0;
+
+uint8_t BHM;
+uint8_t BEN;
+uint8_t BLT;
+uint8_t BRT;
+uint8_t BUP;
+uint8_t BDN;
+uint8_t BSW;
+
+volatile TickType_t BTN_tim;
+volatile TickType_t tnow;
+volatile TickType_t tnow_lst;
+volatile TickType_t tnow_disp;
+
+char jstr[64];
+
+char jstr0[32];
+char jstr1[32];
+char jstr2[32];
+char jstr3[32];
+char jstr4[32];
+char jstr5[32];
+
+// *************************************************************
+
+
+// *************************************************************
+// Top Level Setup Function
+// *************************************************************
+void setup() {
+
+
+  int8_t jval;
+  int8_t ival;
+
+  Serial.begin(9600);
+
+  Serial.println("");
+  Serial.println("");
+  Serial.println("*******************");
+  Serial.println("SelfCkt Demo Program");
+  Serial.println("KitchenTimer_v0");
+  Serial.println("*******************");
+  Serial.println("");
+
+  // setup timers
+  jjsetup();
+
+  // setup display
+  selfSetup();
+
+  // setup doide outputs
+  pinMode(DIO_RED, DIO_RED_TYPE);
+  pinMode(DIO_GRN, DIO_GRN_TYPE);
+  pinMode(DIO_BLU, DIO_BLU_TYPE);
+
+  // setup speaker output
+  pinMode(SPK_PIN, SPK_PIN_TYPE);
+
+  // setup button inputs
+  pinMode(BHM_PIN, BHM_PIN_TYPE);
+  pinMode(BEN_PIN, BEN_PIN_TYPE);
+  pinMode(BLT_PIN, BLT_PIN_TYPE);
+  pinMode(BRT_PIN, BRT_PIN_TYPE);
+  pinMode(BUP_PIN, BUP_PIN_TYPE);
+  pinMode(BDN_PIN, BDN_PIN_TYPE);
+  pinMode(BSW_PIN, BSW_PIN_TYPE);
+
+  digitalWrite(DIO_RED, DIO_ON);
+  digitalWrite(DIO_GRN, DIO_ON);
+  digitalWrite(DIO_BLU, DIO_ON);
+
+  mm_num   = NUM_MODES;
+  mm_sel   = 1;
+  mm_start = 1;
+
+  mm_name[0] = "HOME";
+  mm_name[1] = "Kitchen Timer";
+  mm_name[2] = "Metronome";
+  mm_name[3] = "Button Test";
+
+
+  kt_run = 0;
+
+  kt_idx = 2;
+
+  kt_del[5] = 36000000;
+  kt_del[4] =  3600000;
+  kt_del[3] =   600000;
+  kt_del[2] =    60000;
+  kt_del[1] =    10000;
+  kt_del[0] =     1000;
+
+  kt_len = kt_del[kt_idx];
+
+
+  /* Metronome idx map */
+  /*    9  8  7  : bpm */
+  /*    6  5  4  : cnt */
+  /* 3  2  1  0  : frq */
+
+  mt_run = 0;
+  mt_idx = 8;
+  mt_del[9] =  100;
+  mt_del[8] =   10;
+  mt_del[7] =    1;
+  mt_del[6] =  100;
+  mt_del[5] =   10;
+  mt_del[4] =    1;
+  mt_del[3] = 1000;
+  mt_del[2] =  100;
+  mt_del[1] =   10;
+  mt_del[0] =    1;
+
+  mt_bpm = 120;
+  mt_cnt = 4;
+  mt_frq = 1175;
+
+  // **********************************************
+  // print initial message to display
+  // **********************************************
+  sprintf(jstr, "      Welcome");
+  selfTextN(0, 1, jstr, 20);
+
+  sprintf(jstr, "  selfcircuits.com  ");
+  selfTextN(0, 3, jstr, 20);
+
+  selfDraw();
+  delay(2000);
+
+  sprintf(jstr, "  HM    -->  Home");
+  selfTextN(0, 1, jstr, 20);
+
+  sprintf(jstr, "  Sel   -->  Select");
+  selfTextN(0, 3, jstr, 20);
+
+  sprintf(jstr, "  UP/DN -->  Scroll");
+  selfTextN(0, 5, jstr, 20);
+
+  selfDraw();
+  delay(3000);
+
+  selfClrScrn();
+}
+// *************************************************************
+
+
+// *************************************************************
+// Top Level Loop Function
+// *************************************************************
+void loop() {
+
+  int i;
+
+  uint8_t doRead;
+
+  static uint8_t first_loop = 1;
+
+  static uint8_t BSTATE;
+  static uint8_t BSTATE_lst;
+
+
+  static uint8_t  JMS_MODE = 0;
+  static uint8_t  JMS_MODE_LAST = 0;
+
+  static bool jjsound_on_curr;
+  static bool jjsound_on_last;
+
+  uint8_t BHM_R;
+  uint8_t BHM_F;
+
+  uint8_t BEN_R;
+  uint8_t BEN_F;
+
+  uint8_t BLT_R;
+  uint8_t BLT_F;
+
+  uint8_t BRT_R;
+  uint8_t BRT_F;
+
+  uint8_t BUP_R;
+  uint8_t BUP_F;
+
+  uint8_t BDN_R;
+  uint8_t BDN_F;
+
+  uint8_t BSW_R;
+  uint8_t BSW_F;
+
+  static int rollcnt = 0;
+
+  static int ival = 0;
+  static char rstr[32];
+  static int  rdx = 0;
+  static int  persist = 0;
+  char ch;
+  int eflag;
+  int lflag;
+
+  // *********************************************************************
+  // get button state
+  // *********************************************************************
+  // sprintf(jstr, "Hello (%d)", portTICK_PERIOD_MS);
+  tnow = xTaskGetTickCount();
+  BHM = (digitalRead(BHM_PIN)) ? BHM_ON : BHM_OFF;
+  BEN = (digitalRead(BEN_PIN)) ? BEN_ON : BEN_OFF;
+  BLT = (digitalRead(BLT_PIN)) ? BLT_ON : BLT_OFF;
+  BRT = (digitalRead(BRT_PIN)) ? BRT_ON : BRT_OFF;
+  BUP = (digitalRead(BUP_PIN)) ? BUP_ON : BUP_OFF;
+  BDN = (digitalRead(BDN_PIN)) ? BDN_ON : BDN_OFF;
+  BSW = (digitalRead(BSW_PIN)) ? BSW_ON : BSW_OFF;
+  BSTATE = (BHM  << 6) + (BEN << 5) + (BLT << 4) + (BRT << 3) + (BUP << 2) + (BDN << 1) + (BSW);
+
+  // Serial.printf("Pull State %d", BSTATE);
+  // Serial.println("");
+  // pushCnt++;
+
+  if (first_loop) {
+    first_loop = 0;
+    tnow_lst = tnow;
+    tnow_disp = tnow;
+    BSTATE_lst = BSTATE;
+  }
+  // *********************************************************************
+
+
+  // **********************************************
+  // print to the display
+  // **********************************************
+  // sprintf(jstr, "%d : %d - %d", pushCnt, JMS_MODE, kt_len);
+  // if (persist == 0) {
+  //   selfTextN(1,  5, jstr, 19);
+  // }
+
+  jjsound_on_curr = jjsound_on;
+
+  if (jjsound_on_curr && !jjsound_on_last) {
+    if (JMS_MODE == 1) {
+      digitalWrite(DIO_RED, DIO_ON);
+      digitalWrite(DIO_GRN, DIO_ON);
+      digitalWrite(DIO_BLU, DIO_ON);
+    } else if (JMS_MODE == 2) {
+      if (jjbdx == 0) {
+        digitalWrite(DIO_RED, DIO_ON);
+        digitalWrite(DIO_GRN, DIO_ON);
+        digitalWrite(DIO_BLU, DIO_ON);
+      } else {
+        digitalWrite(DIO_RED, DIO_OFF);
+        digitalWrite(DIO_GRN, DIO_OFF);
+        digitalWrite(DIO_BLU, DIO_ON);
+      }
+    }
+  } else if (!jjsound_on_curr && jjsound_on_last) {
+    if (JMS_MODE == 2) {
+      digitalWrite(DIO_RED, DIO_OFF);
+      digitalWrite(DIO_GRN, DIO_OFF);
+      digitalWrite(DIO_BLU, DIO_OFF);
+    }
+  }
+
+  if (JMS_MODE_LAST != JMS_MODE) {
+    selfClrScrn();
+  }
+
+  if ((tnow <= tnow_disp) || ((tnow - tnow_disp) > DISPLAYTIME)) {
+    tnow_disp = tnow;
+
+
+    if (msg_cnt > 0) {
+      msg_cnt--;
+      selfClrScrn();
+      selfTextN(0, 0, jstr0, 20);
+      selfTextN(0, 1, jstr1, 20);
+      selfTextN(0, 2, jstr2, 20);
+      selfTextN(0, 3, jstr3, 20);
+      selfTextN(0, 4, jstr4, 20);
+      selfTextN(0, 5, jstr5, 20);
+      selfDraw();
+
+    } else if (JMS_MODE == 0) {
+      sprintf(jstr, "        HOME");
+      selfTextN(0, 0, jstr, 20);
+
+      for (mm = 0; mm < 3; mm++) {
+        mdx = (mm_start + mm) % mm_num;
+        sprintf(jstr, "   %s", mm_name[mdx]);
+        if (mdx == mm_sel) {
+          jstr[1] = '>';
+        }
+        selfTextN(0, 2+mm, jstr, 20);
+      }
+      selfTextN(0, 5, "", 20);
+
+      selfDraw();
+
+    } else if (JMS_MODE == 1) {
+
+      sprintf(jstr, "   KITCHEN  TIMER");
+      selfTextN(0,  0, jstr, 20);
+
+      sprintf(jstr, "     hr min sec");
+      selfTextN(0,  2, jstr, 20);
+
+
+      gg_dec  = gg_dec / 100;
+
+      gg_hrs  = gg_dec / 36000;
+      gg_dec -= gg_hrs * 36000;
+
+      gg_min  = gg_dec / 600;
+      gg_dec -= gg_min * 600;
+
+      gg_sec  = gg_dec / 10;
+      gg_dec -= gg_min * 10;
+
+      sprintf(jstr, "     %2d  %2d  %2d", gg_hrs, gg_min, gg_sec);
+      selfTextN(0,  3, jstr, 20);
+
+      if (jjsound_on) {
+        sprintf(jstr, "     %2d  %2d  %2d", gg_hrs, gg_min, gg_sec);
+      } else {
+        gg_dec  = jjcnt0 / 100;
+
+        gg_hrs  = gg_dec / 36000;
+        gg_dec -= gg_hrs * 36000;
+
+        gg_min  = gg_dec / 600;
+        gg_dec -= gg_min * 600;
+
+        gg_sec  = gg_dec / 10;
+        gg_dec -= gg_sec * 10;
+
+        sprintf(jstr, "     %2d  %2d  %2d.%1d", gg_hrs, gg_min, gg_sec, gg_dec);
+      }
+
+      selfTextN(0,  5, jstr, 20);
+
+      if (kt_run) {
+        gg_dec = jjtime_tper;
+        strcpy(jstr, "");
+      } else {
+        gg_dec = kt_len;
+        if (kt_idx == 0) {
+          strcpy(jstr, "              ^");
+        } else if (kt_idx == 1) {
+          strcpy(jstr, "             ^");
+        } else if (kt_idx == 2) {
+          strcpy(jstr, "          ^");
+        } else if (kt_idx == 3) {
+          strcpy(jstr, "         ^");
+        } else if (kt_idx == 4) {
+          strcpy(jstr, "      ^");
+        } else if (kt_idx == 5) {
+          strcpy(jstr, "     ^");
+        }
+      }
+      selfTextN(0,  4, jstr, 20);
+      selfDraw();
+
+    } else if (JMS_MODE == 2) {
+      sprintf(jstr0, " BPM : %7d", mt_bpm);
+      sprintf(jstr4, " FRQ : %7d", mt_frq);
+
+      strcpy(jstr1, "");
+      strcpy(jstr3, "");
+      strcpy(jstr5, "");
+
+      if (mt_run) {
+        sprintf(jstr2, " CNT : %2d / %2d", jjbdx + 1, jjbnum);
+      } else {
+        sprintf(jstr2, " CNT : %7d", mt_cnt);
+        if (mt_idx == 7) {
+          strcpy(jstr1, "             ^");
+        } else if (mt_idx == 8) {
+          strcpy(jstr1, "            ^");
+        } else if (mt_idx == 9) {
+          strcpy(jstr1, "           ^");
+        } else if (mt_idx == 4) {
+          strcpy(jstr3, "             ^");
+        } else if (mt_idx == 5) {
+          strcpy(jstr3, "            ^");
+        } else if (mt_idx == 6) {
+          strcpy(jstr3, "           ^");
+        } else if (mt_idx == 0) {
+          strcpy(jstr5, "             ^");
+        } else if (mt_idx == 1) {
+          strcpy(jstr5, "            ^");
+        } else if (mt_idx == 2) {
+          strcpy(jstr5, "           ^");
+        } else if (mt_idx == 3) {
+          strcpy(jstr5, "          ^");
+        }
+      }
+      selfTextN(0,  0, jstr0, 20);
+      selfTextN(0,  1, jstr1, 20);
+      selfTextN(0,  2, jstr2, 20);
+      selfTextN(0,  3, jstr3, 20);
+      selfTextN(0,  4, jstr4, 20);
+      selfTextN(0,  5, jstr5, 20);
+      selfDraw();
+
+    } else if (JMS_MODE == 3) {
+      sprintf(jstr, "I = %3d %3d %3d", ival, BSTATE, fifo_sdx);
+      selfTextN(1,  1, jstr, 19);
+
+      sprintf(jstr, "J = %3d %d", ival*3, pushCnt);
+      selfTextN(1,  3, jstr, 19);
+      selfDraw();
+
+      sprintf(jstr, "%d : %d", pushCnt, JMS_MODE);
+      if (persist == 0) {
+        selfTextN(1,  5, jstr, 19);
+      }
+    }
+
+  }
+  // **********************************************
+
+  jjsound_on_last = jjsound_on_curr;
+
+  // **********************************************
+  // monitor for incoming data on serial port
+  // **********************************************
+  lflag = 0;
+  while ((persist == 0) && !lflag && Serial.available() > 0) {
+    ch = Serial.read();
+    eflag = ((ch == '#') || (ch == '\r') || (ch == '\n'));
+    if (eflag || (rdx >= 15)) {
+      if (!eflag) {
+        rstr[rdx] = ch;
+        rdx += 1;
+        lflag = 1;
+
+      }
+      rstr[rdx] = '\0';
+      selfTextN(1, 5, rstr, 19);
+      selfDraw();
+      rdx = 0;
+      persist = 32;
+    } else {
+      rstr[rdx] = ch;
+      rdx += 1;
+    }
+  }
+
+  if (persist > 0) {
+    persist--;
+    if (persist == 0) {
+
+      selfTextN(1,  5, "    (done)",  19);
+      selfDraw();
+      vTaskDelay(2000);
+
+    }
+  }
+  // **********************************************
+
+
+  // **********************************************
+  // increment ival counter / send rollcnt to serial port
+  // **********************************************
+  ival = ival + 1;
+  if (ival >= 100) {
+    ival = 0;
+    rollcnt += 1;
+    sprintf(jstr, "Roll Cnt : %d\n", rollcnt);
+    Serial.println(jstr);
+  }
+  // **********************************************
+
+
+  // **********************************************
+  // main control code
+  // **********************************************
+  BSW_R = ( BSTATE & ~BSTATE_lst & BSW_MASK);
+  BSW_F = (~BSTATE &  BSTATE_lst & BSW_MASK);
+
+  BHM_R = ( BSTATE & ~BSTATE_lst & BHM_MASK);
+  BHM_F = (~BSTATE &  BSTATE_lst & BHM_MASK);
+
+  BUP_R = ( BSTATE & ~BSTATE_lst & BUP_MASK);
+  BDN_R = ( BSTATE & ~BSTATE_lst & BDN_MASK);
+
+  BEN_R = ( BSTATE & ~BSTATE_lst & BEN_MASK);
+  BLT_R = ( BSTATE & ~BSTATE_lst & BLT_MASK);
+  BRT_R = ( BSTATE & ~BSTATE_lst & BRT_MASK);
+
+  JMS_MODE_LAST = JMS_MODE;
+
+  if (JMS_MODE == 0) {
+    if (BDN_R) {
+      if (mm_sel >= 3) {
+        mm_sel = 1;
+      } else {
+        mm_sel += 1;
+      }
+
+    } else if (BUP_R) {
+      if (mm_sel <= 1) {
+        mm_sel = 3;
+      } else {
+        mm_sel -= 1;
+      }
+
+    } else if (BEN_R) {
+      JMS_MODE = mm_sel;
+
+    } else if (BSW_R) {
+      if (mm_sel == 1) {
+        JMS_MODE = mm_sel;
+        kt_run = 1;
+      } else if (mm_sel == 2) {
+        JMS_MODE = mm_sel;
+        mt_run = 1;
+      }
+
+    } else if (BLT_R || BRT_R) {
+      strcpy(jstr0, " ***************");
+      strcpy(jstr1, "");
+      strcpy(jstr2, " Use UP/DN SEL");
+      strcpy(jstr3, " to choose mode");
+      strcpy(jstr4, "");
+      strcpy(jstr5, " ***************");
+      msg_cnt = 25;
+    }
+  }
+
+  if (JMS_MODE == 1) {
+    if (kt_run) {
+      // do nothing
+    } else if (BUP_R) {
+      kt_len += kt_del[kt_idx];
+    } else if (BDN_R) {
+      if (kt_len <= kt_del[kt_idx]) {
+        kt_len = 0;
+      } else {
+        kt_len -= kt_del[kt_idx];
+      }
+    } else if (BLT_R) {
+      if (kt_idx >= 5) {
+        kt_idx = 5;
+      } else {
+        kt_idx += 1;
+      }
+    } else if (BRT_R) {
+      if (kt_idx <= 0) {
+        kt_idx = 0;
+      } else {
+        kt_idx -= 1;
+      }
+    }
+
+  } else if (JMS_MODE == 2) {
+    if (mt_run) {
+      // do nothing
+    } else if (BUP_R) {
+      if (mt_idx < 4) {
+        mt_frq += mt_del[mt_idx];
+      } else if (mt_idx < 7) {
+        mt_cnt += mt_del[mt_idx];
+      } else if (mt_idx < 10) {
+        mt_bpm += mt_del[mt_idx];
+      }
+    } else if (BDN_R) {
+      if (mt_idx < 4) {
+        if (mt_frq >  mt_del[mt_idx]) {
+          mt_frq -= mt_del[mt_idx];
+        } else {
+          mt_frq = 0;
+        }
+        if (mt_frq < 20) {
+          mt_frq = 20;
+        }
+      } else if (mt_idx < 7) {
+        if (mt_cnt > mt_del[mt_idx]) {
+          mt_cnt -= mt_del[mt_idx];
+        } else {
+          mt_cnt = 0;
+        }
+        if (mt_cnt < 1) {
+          mt_cnt = 1;
+        }
+      } else if (mt_idx < 10) {
+        if (mt_bpm > mt_del[mt_idx]) {
+          mt_bpm -= mt_del[mt_idx];
+        } else {
+          mt_bpm = 0;
+        }
+        if (mt_bpm < 10) {
+          mt_bpm = 10;
+        }
+      }
+    } else if (BLT_R) {
+      if (mt_idx >= 9) {
+        mt_idx = 0;
+      } else {
+        mt_idx += 1;
+      }
+    } else if (BRT_R) {
+      if (mt_idx <= 0) {
+        mt_idx = 9;
+      } else {
+        mt_idx -= 1;
+      }
+    }
+
+  } else {
+    if (BHM_R) {
+      JMS_MODE = 0;
+    }
+  }
+
+  if (JMS_MODE == 1) {
+    if (JMS_MODE_LAST != JMS_MODE) {
+      digitalWrite(DIO_RED, DIO_ON);
+      digitalWrite(DIO_GRN, DIO_OFF);
+      digitalWrite(DIO_BLU, DIO_OFF);
+      selfClrScrn();
+    }
+    if (BSW_R) {
+      digitalWrite(DIO_RED, DIO_OFF);
+      digitalWrite(DIO_GRN, DIO_ON);
+      digitalWrite(DIO_BLU, DIO_OFF);
+      Serial.printf("START TIMER");
+      jjTurnOn_kitchen(kt_len);
+      kt_run = 1;
+    } else if (BSW_F) {
+      digitalWrite(DIO_RED, DIO_ON);
+      digitalWrite(DIO_GRN, DIO_OFF);
+      digitalWrite(DIO_BLU, DIO_OFF);
+      Serial.printf("STOP  TIMER");
+      jjTurnOff_kitchen();
+      kt_run = 0;
+    } else if (BHM_R) {
+      if (kt_run) {
+        strcpy(jstr0, " ***************");
+        strcpy(jstr1, "");
+        strcpy(jstr2, " Please Turn Off");
+        strcpy(jstr3, " Before Exiting");
+        strcpy(jstr4, "");
+        strcpy(jstr5, " ***************");
+        msg_cnt = 25;
+      } else {
+        Serial.printf("STOP  TIMER");
+        jjTurnOff_kitchen();
+        JMS_MODE = 0;
+        kt_run = 0;
+      }
+    } else if ((kt_run) && (BLT_R || BRT_R || BUP_R || BDN_R)) {
+      strcpy(jstr0, " ***************");
+      strcpy(jstr1, "");
+      strcpy(jstr2, " Button Disabled");
+      strcpy(jstr3, "  While Running");
+      strcpy(jstr4, "");
+      strcpy(jstr5, " ***************");
+      msg_cnt = 25;
+    }
+  } else if (JMS_MODE == 2) {
+    if (JMS_MODE_LAST != JMS_MODE) {
+      digitalWrite(DIO_RED, DIO_ON);
+      digitalWrite(DIO_GRN, DIO_OFF);
+      digitalWrite(DIO_BLU, DIO_OFF);
+      selfClrScrn();
+    }
+    if (BSW_R) {
+      Serial.printf("H");
+      jjTurnOn_metronome(mt_bpm, mt_cnt, mt_frq);
+      mt_run = 1;
+    } else if (BSW_F) {
+      digitalWrite(DIO_RED, DIO_ON);
+      digitalWrite(DIO_GRN, DIO_OFF);
+      digitalWrite(DIO_BLU, DIO_OFF);
+      Serial.printf("L");
+      jjTurnOff_metronome();
+      mt_run = 0;
+    } else if (BHM_R) {
+      if (mt_run) {
+        strcpy(jstr0, " ***************");
+        strcpy(jstr1, "");
+        strcpy(jstr2, " Please Turn Off");
+        strcpy(jstr3, " Before Exiting");
+        strcpy(jstr4, "");
+        strcpy(jstr5, " ***************");
+        msg_cnt = 25;
+      } else {
+        Serial.printf("STOP  Metro");
+        jjTurnOff_metronome();
+        JMS_MODE = 0;
+        mt_run = 0;
+      }
+    } else if ((mt_run) && (BLT_R || BRT_R || BUP_R || BDN_R)) {
+      strcpy(jstr0, " ***************");
+      strcpy(jstr1, "");
+      strcpy(jstr2, " Button Disabled");
+      strcpy(jstr3, "  While Running");
+      strcpy(jstr4, "");
+      strcpy(jstr5, " ***************");
+      msg_cnt = 25;
+    }
+
+  }
+
+
+  // **********************************************
+
+
+
+  // **********************************************
+  // short delay if FIFO was empty
+  // **********************************************
+  // if (doRead) {
+  //   vTaskDelay(BSTROBE_DLY);
+  // }
+  // **********************************************
+
+  if (BSTATE != BSTATE_lst) {
+    pushCnt++;
+  }
+
+
+  vTaskDelay(BSTROBE_DLY);
+
+  BSTATE_lst = BSTATE;
+  tnow_lst = tnow;
+
+}
+
+

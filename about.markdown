@@ -1,10 +1,9 @@
 ---
-layout: page
+layout: default
 title: About
-permalink: /about/
+#permalink: /about/
 ---
 
-This is my new website. Find an example program for the ESP32 board [here](https://selfcircuits.com/example)
+This is my new website. 
 
-{% include simple-menu.html %}
 
