@@ -28,9 +28,15 @@ twitter_username:
 github_username:  jwarwar
 
 # Build settings
-theme: minima
+
+#removed minima theme, now a regular theme
+#theme: minima
 plugins:
   - jekyll-feed
+  - jekyll-seo-tag
+
+#gems:
+#  - jekyll-seo-tag
 
 # Exclude from processing.
 # The following items will not be processed, by default.
