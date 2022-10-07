@@ -26,6 +26,7 @@ baseurl: "" # the subpath of your site, e.g. /blog
 url: "https://selfcircuits.com" # the base hostname & protocol for your site, e.g. http://example.com
 twitter_username: 
 github_username:  jwarwar
+linkedin_username: johnnywarwar
 
 # Build settings
 
@@ -37,6 +38,7 @@ plugins:
 
 #gems:
 #  - jekyll-seo-tag
+
 
 # Exclude from processing.
 # The following items will not be processed, by default.
