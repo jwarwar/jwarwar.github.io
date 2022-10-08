@@ -33,7 +33,7 @@ linkedin_username: johnnywarwar
 #removed minima theme, now a regular theme
 #theme: minima
 plugins:
-#  - jekyll-feed
+  - jekyll-feed
   - jekyll-seo-tag
   - jekyll-admin
 
