@@ -1,7 +1,7 @@
 ---
 layout: default
 imagesch: /assets/images/selfckt_SCH.png
-
+permalink: /schematics/
 
 ---
 
