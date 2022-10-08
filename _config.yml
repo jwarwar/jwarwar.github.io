@@ -41,11 +41,6 @@ plugins:
 #  - jekyll-seo-tag
 
 
-#relative_permalinks: false
-
-
-include: ['_pages']
-
 
 header_pages:
   - index.markdown
