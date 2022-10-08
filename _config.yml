@@ -35,10 +35,16 @@ linkedin_username: johnnywarwar
 plugins:
 #  - jekyll-feed
   - jekyll-seo-tag
+  - jekyll-admin
 
 #gems:
 #  - jekyll-seo-tag
 
+
+#relative_permalinks: false
+
+
+include: ['_pages']
 
 
 header_pages:

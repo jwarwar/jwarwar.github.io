@@ -1,5 +1,4 @@
 ---
-permalink: /resources/
 layout: default
 ---
 
